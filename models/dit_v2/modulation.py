@@ -77,12 +77,34 @@ class AdaSingle(nn.Module):
         emb = expand_dims(emb, 1, hid.ndim + 1)
 
         if hid_len is not None:
+            # [DBG] temporary diagnostic block to localize CUDA "no kernel image" error.
+            # Remove after debugging.
+            torch.cuda.synchronize()
+            print(
+                f"[DBG] before repeat: idx={idx} branch_tag={branch_tag} "
+                f"emb.shape={tuple(emb.shape)} emb.dtype={emb.dtype} emb.device={emb.device} "
+                f"emb.is_contiguous={emb.is_contiguous()} "
+                f"hid_len={hid_len.tolist()} hid.shape={tuple(hid.shape)} hid.dtype={hid.dtype}",
+                flush=True,
+            )
+            try:
+                _repeated = []
+                for _i, (_e, _l) in enumerate(zip(emb, hid_len)):
+                    _li = int(_l.item()) if torch.is_tensor(_l) else int(_l)
+                    print(f"[DBG]   repeat[{_i}]: e.shape={tuple(_e.shape)} l={_li}", flush=True)
+                    _r = _e.repeat(_li, *([1] * _e.ndim))
+                    torch.cuda.synchronize()
+                    _repeated.append(_r)
+                print(f"[DBG] repeat done, n={len(_repeated)}", flush=True)
+                _cat = torch.cat(_repeated)
+                torch.cuda.synchronize()
+                print(f"[DBG] cat done: shape={tuple(_cat.shape)}", flush=True)
+            except Exception as _ex:
+                print(f"[DBG] FAIL at idx={idx}/{branch_tag}: {_ex!r}", flush=True)
+                raise
             emb = cache(
                 f"emb_repeat_{idx}_{branch_tag}",
-                lambda: slice_inputs(
-                    torch.cat([e.repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len)]),
-                    dim=0,
-                ),
+                lambda: slice_inputs(_cat, dim=0),
             )
 
         shiftA, scaleA, gateA = emb.unbind(-1)
