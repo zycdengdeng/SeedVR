@@ -77,21 +77,33 @@ class AdaSingle(nn.Module):
         emb = expand_dims(emb, 1, hid.ndim + 1)
 
         if hid_len is not None:
-            # NOTE: two interacting bugs on this env (torch 2.4.0+cu121 + A100):
-            # (1) Tensor.contiguous() on a strided bf16 view raises a spurious
-            #     "no kernel image is available" error, so we use .clone()
-            #     (different copy backend) before .repeat().
-            # (2) Passing a 0-d cuda LongTensor as the `repeats` arg to
-            #     .repeat() also surfaces the same error, so we materialize
-            #     hid_len to a Python list of ints up front.
-            hid_len_list = hid_len.tolist()
-            emb = cache(
-                f"emb_repeat_{idx}_{branch_tag}",
-                lambda: slice_inputs(
-                    torch.cat([e.clone().repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len_list)]),
-                    dim=0,
-                ),
-            )
+            # NOTE: On this env (torch 2.4.0+cu121 + A100, with apex and
+            # flash-attn loaded) certain CUDA kernels raise a spurious
+            # "no kernel image is available for execution on the device" when
+            # invoked from a tight listcomp without explicit synchronization
+            # between ops, even though the same ops succeed in isolation.
+            # Workaround:
+            #   - materialize hid_len to Python ints up front
+            #   - replace the listcomp with an explicit loop that:
+            #       * uses .clone() instead of relying on .repeat()'s
+            #         implicit .contiguous() (.contiguous() hits the bug)
+            #       * synchronizes between clone, repeat, and append
+            _hid_len_list = hid_len.tolist()
+            _emb_for_repeat = emb
+
+            def _build_emb_repeat():
+                _parts = []
+                for _e, _l in zip(_emb_for_repeat, _hid_len_list):
+                    _e_c = _e.clone()
+                    torch.cuda.synchronize()
+                    _r = _e_c.repeat(_l, *([1] * _e_c.ndim))
+                    torch.cuda.synchronize()
+                    _parts.append(_r)
+                _cat = torch.cat(_parts)
+                torch.cuda.synchronize()
+                return slice_inputs(_cat, dim=0)
+
+            emb = cache(f"emb_repeat_{idx}_{branch_tag}", _build_emb_repeat)
 
         shiftA, scaleA, gateA = emb.unbind(-1)
         shiftB, scaleB, gateB = (
