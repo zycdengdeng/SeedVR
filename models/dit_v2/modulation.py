@@ -97,14 +97,38 @@ class AdaSingle(nn.Module):
                 for _i in range(len(_list_e)):
                     _e = _list_e[_i]
                     _l = _list_l[_i]
-                    torch.cuda.synchronize(); print(f"[DBG] D[{_i}]: got _e and _l", flush=True)
+                    torch.cuda.synchronize(); print(f"[DBG] D[{_i}]: got _e and _l, _e.stride={_e.stride()}", flush=True)
                     _li = _l.item()
-                    torch.cuda.synchronize(); print(f"[DBG] E[{_i}]: _li={_li} (type={type(_li).__name__})", flush=True)
-                    _e_c = _e.contiguous()
-                    torch.cuda.synchronize(); print(f"[DBG] F[{_i}]: _e_c.contig={_e_c.is_contiguous()} shape={tuple(_e_c.shape)}", flush=True)
-                    # Try a tiny op on _e_c first to confirm it's healthy
-                    _probe = _e_c.sum()
-                    torch.cuda.synchronize(); print(f"[DBG] G[{_i}]: probe sum={_probe.item()}", flush=True)
+                    torch.cuda.synchronize(); print(f"[DBG] E[{_i}]: _li={_li}", flush=True)
+                    # Try 4 alternatives to make _e contiguous, log which work.
+                    _e_c = None
+                    # (1) plain .contiguous()
+                    try:
+                        _tmp = _e.contiguous(); torch.cuda.synchronize()
+                        print(f"[DBG] E1[{_i}]: .contiguous() OK", flush=True); _e_c = _e_c or _tmp
+                    except Exception as ex:
+                        print(f"[DBG] E1[{_i}]: .contiguous() FAIL: {type(ex).__name__}: {ex}", flush=True)
+                    # (2) .clone()
+                    try:
+                        _tmp = _e.clone(); torch.cuda.synchronize()
+                        print(f"[DBG] E2[{_i}]: .clone() OK", flush=True); _e_c = _e_c or _tmp
+                    except Exception as ex:
+                        print(f"[DBG] E2[{_i}]: .clone() FAIL: {type(ex).__name__}: {ex}", flush=True)
+                    # (3) empty + copy_
+                    try:
+                        _tmp = torch.empty(_e.shape, dtype=_e.dtype, device=_e.device).copy_(_e); torch.cuda.synchronize()
+                        print(f"[DBG] E3[{_i}]: empty+copy_ OK", flush=True); _e_c = _e_c or _tmp
+                    except Exception as ex:
+                        print(f"[DBG] E3[{_i}]: empty+copy_ FAIL: {type(ex).__name__}: {ex}", flush=True)
+                    # (4) dtype roundtrip
+                    try:
+                        _tmp = _e.float().to(_e.dtype); torch.cuda.synchronize()
+                        print(f"[DBG] E4[{_i}]: float-roundtrip OK", flush=True); _e_c = _e_c or _tmp
+                    except Exception as ex:
+                        print(f"[DBG] E4[{_i}]: float-roundtrip FAIL: {type(ex).__name__}: {ex}", flush=True)
+                    if _e_c is None:
+                        raise RuntimeError("all 4 contiguous strategies failed")
+                    torch.cuda.synchronize(); print(f"[DBG] F[{_i}]: picked _e_c contig={_e_c.is_contiguous()}", flush=True)
                     _r = _e_c.repeat(_li, *([1] * _e_c.ndim))
                     torch.cuda.synchronize(); print(f"[DBG] H[{_i}]: repeat done shape={tuple(_r.shape)}", flush=True)
                     _repeated.append(_r)
