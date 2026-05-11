@@ -88,22 +88,29 @@ class AdaSingle(nn.Module):
                 flush=True,
             )
             try:
+                torch.cuda.synchronize(); print("[DBG] A: before for-loop", flush=True)
                 _repeated = []
-                for _i, (_e, _l) in enumerate(zip(emb, hid_len)):
-                    _li = int(_l.item()) if torch.is_tensor(_l) else int(_l)
+                _list_e = list(emb)
+                torch.cuda.synchronize(); print(f"[DBG] B: list(emb) len={len(_list_e)} first.shape={tuple(_list_e[0].shape)} first.contig={_list_e[0].is_contiguous()}", flush=True)
+                _list_l = list(hid_len)
+                torch.cuda.synchronize(); print(f"[DBG] C: list(hid_len) len={len(_list_l)} first.shape={tuple(_list_l[0].shape)} first.dtype={_list_l[0].dtype}", flush=True)
+                for _i in range(len(_list_e)):
+                    _e = _list_e[_i]
+                    _l = _list_l[_i]
+                    torch.cuda.synchronize(); print(f"[DBG] D[{_i}]: got _e and _l", flush=True)
+                    _li = _l.item()
+                    torch.cuda.synchronize(); print(f"[DBG] E[{_i}]: _li={_li} (type={type(_li).__name__})", flush=True)
                     _e_c = _e.contiguous()
-                    print(
-                        f"[DBG]   repeat[{_i}]: e.shape={tuple(_e.shape)} "
-                        f"contig_before={_e.is_contiguous()} contig_after={_e_c.is_contiguous()} l={_li}",
-                        flush=True,
-                    )
+                    torch.cuda.synchronize(); print(f"[DBG] F[{_i}]: _e_c.contig={_e_c.is_contiguous()} shape={tuple(_e_c.shape)}", flush=True)
+                    # Try a tiny op on _e_c first to confirm it's healthy
+                    _probe = _e_c.sum()
+                    torch.cuda.synchronize(); print(f"[DBG] G[{_i}]: probe sum={_probe.item()}", flush=True)
                     _r = _e_c.repeat(_li, *([1] * _e_c.ndim))
-                    torch.cuda.synchronize()
+                    torch.cuda.synchronize(); print(f"[DBG] H[{_i}]: repeat done shape={tuple(_r.shape)}", flush=True)
                     _repeated.append(_r)
-                print(f"[DBG] repeat done, n={len(_repeated)}", flush=True)
+                print(f"[DBG] repeat loop done, n={len(_repeated)}", flush=True)
                 _cat = torch.cat(_repeated)
-                torch.cuda.synchronize()
-                print(f"[DBG] cat done: shape={tuple(_cat.shape)}", flush=True)
+                torch.cuda.synchronize(); print(f"[DBG] I: cat done shape={tuple(_cat.shape)}", flush=True)
             except Exception as _ex:
                 print(f"[DBG] FAIL at idx={idx}/{branch_tag}: {_ex!r}", flush=True)
                 raise
