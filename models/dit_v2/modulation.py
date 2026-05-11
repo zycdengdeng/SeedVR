@@ -91,8 +91,13 @@ class AdaSingle(nn.Module):
                 _repeated = []
                 for _i, (_e, _l) in enumerate(zip(emb, hid_len)):
                     _li = int(_l.item()) if torch.is_tensor(_l) else int(_l)
-                    print(f"[DBG]   repeat[{_i}]: e.shape={tuple(_e.shape)} l={_li}", flush=True)
-                    _r = _e.repeat(_li, *([1] * _e.ndim))
+                    _e_c = _e.contiguous()
+                    print(
+                        f"[DBG]   repeat[{_i}]: e.shape={tuple(_e.shape)} "
+                        f"contig_before={_e.is_contiguous()} contig_after={_e_c.is_contiguous()} l={_li}",
+                        flush=True,
+                    )
+                    _r = _e_c.repeat(_li, *([1] * _e_c.ndim))
                     torch.cuda.synchronize()
                     _repeated.append(_r)
                 print(f"[DBG] repeat done, n={len(_repeated)}", flush=True)
