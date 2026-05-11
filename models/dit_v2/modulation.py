@@ -77,14 +77,18 @@ class AdaSingle(nn.Module):
         emb = expand_dims(emb, 1, hid.ndim + 1)
 
         if hid_len is not None:
-            # NOTE: .clone() is required instead of relying on .repeat()'s
-            # implicit contiguous on this env (torch 2.4.0+cu121 + A100):
-            # .contiguous() on a strided bf16 view raises a spurious
-            # "no kernel image is available" error, while .clone() works.
+            # NOTE: two interacting bugs on this env (torch 2.4.0+cu121 + A100):
+            # (1) Tensor.contiguous() on a strided bf16 view raises a spurious
+            #     "no kernel image is available" error, so we use .clone()
+            #     (different copy backend) before .repeat().
+            # (2) Passing a 0-d cuda LongTensor as the `repeats` arg to
+            #     .repeat() also surfaces the same error, so we materialize
+            #     hid_len to a Python list of ints up front.
+            hid_len_list = hid_len.tolist()
             emb = cache(
                 f"emb_repeat_{idx}_{branch_tag}",
                 lambda: slice_inputs(
-                    torch.cat([e.clone().repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len)]),
+                    torch.cat([e.clone().repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len_list)]),
                     dim=0,
                 ),
             )
