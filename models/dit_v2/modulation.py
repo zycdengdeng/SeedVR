@@ -77,21 +77,24 @@ class AdaSingle(nn.Module):
         emb = expand_dims(emb, 1, hid.ndim + 1)
 
         if hid_len is not None:
-            # Workaround: on certain torch/driver combinations, Tensor.repeat()
-            # on a non-contiguous bf16 view (from rearrange + slice) raises
-            # "CUDA error: no kernel image is available". Two changes:
-            # (1) clone the view to a contiguous buffer before repeat, which
-            #     dispatches through a different copy backend.
-            # (2) materialize hid_len to Python ints; passing a 0-d cuda
-            #     LongTensor as repeats hits the same path.
+            # Workaround for a CUDA-context-dependent bug on this host where
+            # any bf16 copy kernel (clone / contiguous / repeat on a strided
+            # view) raises "no kernel image is available" inside the model
+            # forward, even though the same ops succeed in a fresh process.
+            # CPU fallback: move emb to CPU for the repeat/cat, then back.
+            # Cost: one D2H + one H2D per DiT block call, small for inference.
             hid_len_list = hid_len.tolist()
-            emb = cache(
-                f"emb_repeat_{idx}_{branch_tag}",
-                lambda: slice_inputs(
-                    torch.cat([e.clone().repeat(l, *([1] * e.ndim)) for e, l in zip(emb, hid_len_list)]),
-                    dim=0,
-                ),
-            )
+            orig_device = emb.device
+            orig_dtype = emb.dtype
+            emb_cpu = emb.detach().to('cpu', dtype=torch.float32)
+
+            def _build():
+                parts = [e.repeat(l, *([1] * e.ndim)) for e, l in zip(emb_cpu, hid_len_list)]
+                cat_cpu = torch.cat(parts).to(orig_dtype)
+                cat_gpu = cat_cpu.to(orig_device)
+                return slice_inputs(cat_gpu, dim=0)
+
+            emb = cache(f"emb_repeat_{idx}_{branch_tag}", _build)
 
         shiftA, scaleA, gateA = emb.unbind(-1)
         shiftB, scaleB, gateB = (
