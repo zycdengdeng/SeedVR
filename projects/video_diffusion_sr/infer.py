@@ -344,5 +344,12 @@ class VideoDiffusionInfer():
         samples = self.vae_decode(latents)
 
         if dit_offload:
+            # Free VAE activations and cache before bringing DiT back to GPU,
+            # otherwise on tight setups (e.g. 7B at 1080p with sp_size>1) the
+            # dit.to(device) move OOMs with a small request like 108 MiB.
+            self.vae.to("cpu")
+            import gc
+            gc.collect()
+            torch.cuda.empty_cache()
             self.dit.to(get_device())
         return samples
